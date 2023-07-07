@@ -1,0 +1,6 @@
+&setup
+ infile='/scratch1/NCEPDEV/da/Cory.R.Martin/JEDI/jedipara/aero_spinup/ROTDIRS/atma_c384_spinup/gdas.20210731/18/atmos/gdas.t18z.atminc.nc',
+ outfile='./cubeinc.nc',
+ gridpath='/scratch1/NCEPDEV/global/glopara/fix/orog/20230615/C192/C192_',
+ lev=127,
+/

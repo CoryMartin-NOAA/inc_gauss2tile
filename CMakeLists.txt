@@ -45,5 +45,6 @@ if(OPENMP)
   find_package(OpenMP REQUIRED)
 endif()
 
+add_subdirectory(parm)
 add_subdirectory(src)
 

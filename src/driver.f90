@@ -17,7 +17,7 @@
 ! gridpath              - Path to files oro_data.tile1.nc,...,oro_data.tile6.nc
 !                         grid definition containing geolat/geolon
 !
-! 2023-06-16        Initial version.
+! 2023-07-07        Initial version.
 !
 !---------------------------------------------------------------------
 
@@ -56,10 +56,13 @@
  real, allocatable :: dummy_out(:,:,:,:)
  real, allocatable :: dummy_2d(:,:)
 
- real(8) :: rad2deg,dlondeg
+ real(8) :: rad2deg,dlondeg,deg2rad
  real(8), allocatable :: latitude_in(:), longitude_in(:)
  real(8), allocatable :: lat_out(:,:,:), lon_out(:,:,:)
 
+ real, allocatable :: s2c(:,:,:,:)
+ real, allocatable, dimension(:,:,:) :: id1, id2, jdc
+ real, allocatable :: agrid(:,:,:,:)
 
  ! NOTE: u_inc,v_inc must be consecutive
  data records_in /'u_inc', 'v_inc', 'delp_inc', 'delz_inc', 'T_inc', &
@@ -93,6 +96,7 @@ call mpi_comm_size(mpi_comm_world, npes, mpierr)
 
 ! Set constants
  rad2deg = 180.0_8 / (4.0_8 * atan(1.0_8))
+ deg2rad = (4.0_8 * atan(1.0_8)) / 180.0_8
 
  ilev=lev+1
 
@@ -220,7 +224,7 @@ call mpi_comm_size(mpi_comm_world, npes, mpierr)
 ! first allocate arrays based on the first tile
  t = 1
  write (tilestr, "(I1)") t
- gridfile=trim(gridpath)//'/oro_data.tile'//trim(tilestr)//'.nc'
+ gridfile=trim(gridpath)//'oro_data.tile'//trim(tilestr)//'.nc'
  error = nf90_open(trim(gridfile), ior(nf90_nowrite, nf90_mpiio), &
                    comm=mpi_comm_world, info = mpi_info_null, ncid=ncid_geo)
  call netcdf_err(error, 'opening file='//trim(gridfile) )
@@ -230,20 +234,21 @@ call mpi_comm_size(mpi_comm_world, npes, mpierr)
  call netcdf_err(error, 'getting case for file='//trim(gridfile) )
  print *, 'cubed sphere case is ',res
  allocate(lat_out(res,res,6),lon_out(res,res,6))
+ allocate(dummy_2d(res,res))
  ! read in the geolat and geolon
  error = nf90_inq_varid(ncid_geo, 'geolat', id_dim)
  call netcdf_err(error, 'inquiring var geolat dimension for file='//trim(gridfile) )
  error = nf90_get_var(ncid_geo, id_dim, dummy_2d)
  call netcdf_err(error, 'reading geolat for file='//trim(gridfile) )
- lat_out(:,:,1) = dummy_2d(:,:)
+ lat_out(:,:,1) = dble(dummy_2d(:,:))
  error = nf90_inq_varid(ncid_geo, 'geolon', id_dim)
  call netcdf_err(error, 'inquiring var geolon dimension for file='//trim(gridfile) )
  error = nf90_get_var(ncid_geo, id_dim, dummy_2d)
  call netcdf_err(error, 'reading geolon for file='//trim(gridfile) )
- lon_out(:,:,1) = dummy_2d(:,:)
+ lon_out(:,:,1) = dble(dummy_2d(:,:))
  do t= 2, 6 ! loop through other tiles
    write (tilestr, "(I1)") t
-   gridfile=trim(gridpath)//'/oro_data.tile'//trim(tilestr)//'.nc'
+   gridfile=trim(gridpath)//'oro_data.tile'//trim(tilestr)//'.nc'
    error = nf90_open(trim(gridfile), ior(nf90_nowrite, nf90_mpiio), &
                      comm=mpi_comm_world, info = mpi_info_null, ncid=ncid_geo)
    call netcdf_err(error, 'opening file='//trim(gridfile) )
@@ -252,17 +257,42 @@ call mpi_comm_size(mpi_comm_world, npes, mpierr)
    call netcdf_err(error, 'inquiring var geolat dimension for file='//trim(gridfile) )
    error = nf90_get_var(ncid_geo, id_dim, dummy_2d)
    call netcdf_err(error, 'reading geolat for file='//trim(gridfile) )
-   lat_out(:,:,t) = dummy_2d(:,:)
+   lat_out(:,:,t) = dble(dummy_2d(:,:))
    error = nf90_inq_varid(ncid_geo, 'geolon', id_dim)
    call netcdf_err(error, 'inquiring var geolon dimension for file='//trim(gridfile) )
    error = nf90_get_var(ncid_geo, id_dim, dummy_2d)
    call netcdf_err(error, 'reading geolon for file='//trim(gridfile) )
-   lon_out(:,:,t) = dummy_2d(:,:)
+   lon_out(:,:,t) = dble(dummy_2d(:,:))
  end do
-
 !----------------------------------------------------
 ! Calculate interpolation weights
 !----------------------------------------------------
+do i=1,lon_in
+  longitude_in(i) = longitude_in(i) * deg2rad
+enddo
+do i=1,lat_in
+  latitude_in(i) = latitude_in(i) * deg2rad
+enddo
+lat_out(:,:,:) = lat_out(:,:,:) * deg2rad
+lon_out(:,:,:) = lon_out(:,:,:) * deg2rad
+
+allocate(s2c(res, res, 4, 6))
+allocate(id1(res, res, 6))
+allocate(id2(res, res, 6))
+allocate(jdc(res, res, 6))
+allocate(agrid(res+1, res+1, 2, 6))
+
+do k=1,6
+  do i=1,res
+    do j=1,res
+      agrid(i,j,1,k) = lon_out(i,j,k)
+      agrid(i,j,2,k) = lat_out(i,j,k)
+    enddo
+  enddo
+  call remap_coef( 1, res, 1, res, 1, res+1, 1, res+1, &
+                   lon_in, lat_in, longitude_in, latitude_in, id1(:,:,k), &
+                   id2(:,:,k), jdc(:,:,k), s2c(:,:,:,k), agrid(:,:,:,k))
+enddo
 
 !----------------------------------------------------
 ! Open output file for writing
@@ -356,3 +386,80 @@ call mpi_comm_size(mpi_comm_world, npes, mpierr)
  return
  end subroutine netcdf_err
 
+  subroutine remap_coef( is, ie, js, je, isd, ied, jsd, jed, &
+      im, jm, lon, lat, id1, id2, jdc, s2c, agrid )
+
+    integer, intent(in):: is, ie, js, je, isd, ied, jsd, jed
+    integer, intent(in):: im, jm
+    real,    intent(in):: lon(im), lat(jm)
+    real,    intent(out):: s2c(is:ie,js:je,4)
+    integer, intent(out), dimension(is:ie,js:je):: id1, id2, jdc
+    real,    intent(in):: agrid(isd:ied,jsd:jed,2)
+    ! local:
+    real :: rdlon(im)
+    real :: rdlat(jm)
+    real:: a1, b1
+    integer i,j, i1, i2, jc, i0, j0
+    do i=1,im-1
+      rdlon(i) = 1. / (lon(i+1) - lon(i))
+    enddo
+    rdlon(im) = 1. / (lon(1) + 2.*pi - lon(im))
+
+    do j=1,jm-1
+      rdlat(j) = 1. / (lat(j+1) - lat(j))
+    enddo
+
+    ! * Interpolate to cubed sphere cell center
+    do 5000 j=js,je
+
+      do i=is,ie
+
+        if ( agrid(i,j,1)>lon(im) ) then
+          i1 = im;     i2 = 1
+          a1 = (agrid(i,j,1)-lon(im)) * rdlon(im)
+        elseif ( agrid(i,j,1)<lon(1) ) then
+          i1 = im;     i2 = 1
+          a1 = (agrid(i,j,1)+2.*pi-lon(im)) * rdlon(im)
+        else
+          do i0=1,im-1
+            if ( agrid(i,j,1)>=lon(i0) .and. agrid(i,j,1)<=lon(i0+1) ) then
+              i1 = i0;  i2 = i0+1
+              a1 = (agrid(i,j,1)-lon(i1)) * rdlon(i0)
+              go to 111
+            endif
+          enddo
+        endif
+111     continue
+
+        if ( agrid(i,j,2)<lat(1) ) then
+          jc = 1
+          b1 = 0.
+        elseif ( agrid(i,j,2)>lat(jm) ) then
+          jc = jm-1
+          b1 = 1.
+        else
+          do j0=1,jm-1
+            if ( agrid(i,j,2)>=lat(j0) .and. agrid(i,j,2)<=lat(j0+1) ) then
+              jc = j0
+              b1 = (agrid(i,j,2)-lat(jc)) * rdlat(jc)
+              go to 222
+            endif
+          enddo
+        endif
+222     continue
+
+        !if ( a1<0.0 .or. a1>1.0 .or.  b1<0.0 .or. b1>1.0 ) then
+        !     write(*,*) 'gid=', i,j,a1, b1
+        !endif
+
+        s2c(i,j,1) = (1.-a1) * (1.-b1)
+        s2c(i,j,2) =     a1  * (1.-b1)
+        s2c(i,j,3) =     a1  *     b1
+        s2c(i,j,4) = (1.-a1) *     b1
+        id1(i,j) = i1
+        id2(i,j) = i2
+        jdc(i,j) = jc
+      enddo   !i-loop
+5000 continue   ! j-loop
+
+  end subroutine remap_coef

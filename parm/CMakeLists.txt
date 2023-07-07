@@ -1,0 +1,1 @@
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/inc_gauss2tile.nml DESTINATION ${CMAKE_BINARY_DIR}/bin/)
